@@ -1,0 +1,33 @@
+# Core LangChain / LangGraph
+langchain-core>=0.3
+langchain-anthropic>=0.3
+langchain-openai>=0.2
+langchain-community>=0.3
+langgraph>=0.2
+
+# Model provider SDKs
+anthropic>=0.40
+openai>=1.50
+
+# Data / ML
+duckdb>=1.1
+pandas>=2.2
+scikit-learn>=1.5
+prophet>=1.1
+lightgbm>=4.5
+
+# Web framework
+fastapi>=0.115
+uvicorn[standard]>=0.32
+
+# UI
+streamlit>=1.40
+fpdf2>=2.7
+
+# Config / validation
+pydantic>=2.9
+pydantic-settings>=2.6
+
+# Utilities
+pyyaml>=6.0
+structlog>=24.4
