@@ -32,6 +32,12 @@ def main() -> None:
         help="Data access mode",
     )
     parser.add_argument(
+        "--control_profile",
+        choices=["standard", "regulated"],
+        default="standard",
+        help="Structured-control profile for release gating",
+    )
+    parser.add_argument(
         "--skip_ingest",
         action="store_true",
         help="Skip data ingestion (assumes data already loaded)",
@@ -48,13 +54,26 @@ def main() -> None:
     else:
         start_date = None  # run_cycle defaults to as_of - 90 days
 
-    logger.info("run_cycle.start", as_of=str(as_of), start_date=str(start_date), mode=args.mode)
+    logger.info(
+        "run_cycle.start",
+        as_of=str(as_of),
+        start_date=str(start_date),
+        mode=args.mode,
+        control_profile=args.control_profile,
+    )
 
-    state = run_cycle(as_of, args.mode, start_date=start_date, skip_ingest=args.skip_ingest)
+    state = run_cycle(
+        as_of,
+        args.mode,
+        start_date=start_date,
+        control_profile=args.control_profile,
+        skip_ingest=args.skip_ingest,
+    )
 
     print("\n" + "=" * 60)
     print(f"Run ID: {state['ctx'].run_id}")
     print(f"Mode:   {args.mode}")
+    print(f"Control:{args.control_profile}")
     print(f"Window: {state['ctx'].start_date} to {as_of}")
     print("=" * 60)
 
@@ -83,6 +102,11 @@ def main() -> None:
         for action in d.actions[:5]:
             print(f"  [{action.urgency}] {action.action_type}: {action.description[:80]}")
 
+    if state.get("control_review"):
+        cr = state["control_review"]
+        print(f"\n[CONTROL REVIEW] — state={cr.overall_state}")
+        print(f"  {cr.summary}")
+
     if state.get("worker_tasks"):
         print(f"\n[WORKER TASKS] — {len(state['worker_tasks'])} tasks generated")
         for task in state["worker_tasks"][:3]:
@@ -94,6 +118,10 @@ def main() -> None:
         print(f"\n[AUDIT] {status} — {len(ar.findings)} findings")
         for f in ar.findings[:3]:
             print(f"  [{f.severity}] {f.finding_type}: {f.description[:80]}")
+
+    if state.get("dispatch_report"):
+        dr = state["dispatch_report"]
+        print(f"\n[DISPATCH] {dr.status.upper()} — {dr.summary}")
 
     print("\nDone.")
 

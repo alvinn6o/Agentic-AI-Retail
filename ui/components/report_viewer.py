@@ -2,38 +2,71 @@
 
 from __future__ import annotations
 
+from html import escape
 from typing import Any
 
 import pandas as pd
 import streamlit as st
 
-from ui.components.charts import forecast_chart, kpi_cards
+from ui.components.charts import forecast_chart, kpi_cards, top_skus_bar
+from ui.components.enterprise_ui import (
+    render_detail_card,
+    render_section_heading,
+    render_summary_card,
+    status_pill_html,
+)
+
+
+def _format_metric_value(value: Any, unit: str) -> str:
+    if unit == "GBP":
+        return f"GBP {float(value):,.2f}"
+    if value is None:
+        return "-"
+    if unit:
+        return f"{float(value):,.1f} {unit}"
+    return f"{float(value):,.1f}"
 
 
 def show_analyst_report(report: dict[str, Any]) -> None:
-    st.subheader("Analyst Report")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.write(f"**Period:** {report.get('period_start')} → {report.get('period_end')}")
-    with col2:
-        st.write(f"**Mode:** {report.get('mode', '').upper()}")
+    render_section_heading(
+        "Analyst Report",
+        "Grounded KPI view with evidence-backed narrative, top sellers, and anomaly review.",
+        eyebrow="Performance Intelligence",
+    )
 
-    # KPI Cards
+    period = f"{report.get('period_start')} to {report.get('period_end')}"
+    queries = report.get("queries_executed", [])
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        render_summary_card("Analysis Window", period, "Selected bounded or omniscient interval.")
+    with col2:
+        render_summary_card("Mode", report.get("mode", "").upper() or "-", "Data visibility profile.")
+    with col3:
+        render_summary_card("Evidence Queries", str(len(queries)), "Deterministic SQL statements captured.")
+
     kpis = report.get("kpis", [])
     if kpis:
-        st.markdown("#### Key Performance Indicators")
+        render_section_heading(
+            "Key Performance Indicators",
+            "Operational KPIs grounded in SQL before any narrative generation.",
+            eyebrow="Metrics",
+        )
         cols = st.columns(min(len(kpis), 5))
         for i, kpi_data in enumerate(kpi_cards(kpis)):
             with cols[i % len(cols)]:
-                value = kpi_data["value"]
-                unit = kpi_data["unit"]
-                display = f"£{value:,.2f}" if unit == "GBP" else f"{value:,.1f} {unit}"
-                st.metric(kpi_data["label"], display)
+                render_summary_card(
+                    kpi_data["label"],
+                    _format_metric_value(kpi_data["value"], kpi_data["unit"]),
+                    "Evidence-backed KPI",
+                )
 
-    # Top SKUs table (top 10 by revenue)
     top_skus = report.get("top_skus", [])
     if top_skus:
-        st.markdown("#### Top 10 SKUs by Revenue")
+        render_section_heading(
+            "Revenue Concentration",
+            "Top performers by revenue, shown as both a visual ranking and a tabular view.",
+            eyebrow="Merchandise Mix",
+        )
         skus_sorted = sorted(top_skus, key=lambda x: float(x.get("total_revenue") or 0), reverse=True)[:10]
         skus_df = pd.DataFrame(skus_sorted)
         col_map = {
@@ -52,70 +85,125 @@ def show_analyst_report(report: dict[str, Any]) -> None:
                 lambda x: f"{int(float(x)):,}" if x is not None else "—"
             )
         display_cols = [c for c in ["Stock Code", "Description", "Revenue (GBP)", "Units Sold"] if c in skus_df.columns]
-        st.dataframe(skus_df[display_cols], use_container_width=True, hide_index=True)
+        chart_col, table_col = st.columns([1.1, 1])
+        with chart_col:
+            st.plotly_chart(
+                top_skus_bar(skus_sorted, title="Top 10 SKUs by Revenue"),
+                use_container_width=True,
+                config={"displayModeBar": False},
+            )
+        with table_col:
+            st.dataframe(skus_df[display_cols], use_container_width=True, hide_index=True)
 
-    # Narrative
     narrative = report.get("narrative", "")
     if narrative:
-        st.markdown("#### Narrative")
-        st.info(narrative)
+        render_section_heading(
+            "Narrative Synthesis",
+            "Short analyst interpretation constrained by precomputed evidence.",
+            eyebrow="Summary",
+        )
+        render_detail_card("Analyst Narrative", escape(narrative).replace("\n", "<br>"))
 
-    # Anomalies
     anomalies = report.get("anomalies", [])
     if anomalies:
-        st.markdown("#### Anomalies")
+        render_section_heading(
+            "Anomalies",
+            "Potential issues highlighted from the KPI and sales patterns.",
+            eyebrow="Exceptions",
+        )
         for a in anomalies:
             severity = a.get("severity", "info")
-            icon = {"high": "[HIGH]", "medium": "[MED]", "low": "[LOW]"}.get(severity, "[INFO]")
-            st.write(f"{icon} **{severity.upper()}**: {a.get('description')}")
+            tone = {"high": "danger", "medium": "warning", "low": "info"}.get(severity, "neutral")
+            render_detail_card(
+                a.get("description", "Detected anomaly"),
+                "Investigation recommended before execution.",
+                pills=[status_pill_html(severity.upper(), tone)],
+            )
 
-    # Evidence
-    queries = report.get("queries_executed", [])
     if queries:
-        with st.expander(f"SQL Evidence ({len(queries)} queries)"):
+        render_section_heading(
+            "SQL Evidence",
+            "The exact queries used to ground the KPI and narrative outputs.",
+            eyebrow="Traceability",
+        )
+        with st.expander(f"Inspect SQL evidence ({len(queries)} queries)"):
             for q in queries:
                 st.code(q.get("sql", ""), language="sql")
 
 
 def show_forecast_report(report: dict[str, Any]) -> None:
-    st.subheader("Demand Signal Assessment")
-
-    # Reliability verdict based on average MAPE
-    backtest = report.get("backtest_metrics", [])
-    valid_mapes = [m["mape"] for m in backtest if m.get("mape") is not None]
-    avg_mape = sum(valid_mapes) / len(valid_mapes) if valid_mapes else None
-    if avg_mape is None:
-        st.warning("Forecast reliability unknown — no backtest metrics available.")
-    elif avg_mape > 1.0:
-        st.error(
-            f"**Model NOT reliable** — average MAPE {avg_mape:.1%}. "
-            "Forecast direction may be used for planning but specific values should not be cited."
-        )
-    else:
-        st.success(f"**Model reliable** — average MAPE {avg_mape:.1%}.")
-
-    st.caption(
-        f"Model: {report.get('model_name')} | Horizon: {report.get('horizon_days')} days"
+    render_section_heading(
+        "Demand Signal Assessment",
+        "Forecast reliability, SKU-level backtests, and the operational demand outlook.",
+        eyebrow="Forecasting",
     )
 
     backtest = report.get("backtest_metrics", [])
+    valid_mapes = [m["mape"] for m in backtest if m.get("mape") is not None]
+    avg_mape = sum(valid_mapes) / len(valid_mapes) if valid_mapes else None
+    reliability_label = "Unknown"
+    reliability_detail = "No backtest metrics available."
+    reliability_tone = "neutral"
+    if avg_mape is None:
+        reliability_tone = "warning"
+    elif avg_mape > 1.0:
+        reliability_label = f"Directional Only ({avg_mape:.1%} MAPE)"
+        reliability_detail = "Use the forecast for directional planning, not exact quantities."
+        reliability_tone = "danger"
+    else:
+        reliability_label = f"Reliable ({avg_mape:.1%} MAPE)"
+        reliability_detail = "Specific forecast values are appropriate for planning."
+        reliability_tone = "success"
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        render_summary_card("Reliability", reliability_label, reliability_detail)
+    with col2:
+        render_summary_card("Model", str(report.get("model_name", "-")), "Forecasting engine.")
+    with col3:
+        render_summary_card(
+            "Horizon",
+            f"{report.get('horizon_days', 0)} days",
+            f"{len(backtest)} SKU backtests captured.",
+        )
+
+    render_detail_card(
+        "Reliability Guidance",
+        "Forecast reliability is assessed from held-out backtests before downstream decisioning.",
+        pills=[status_pill_html(reliability_label, reliability_tone)],
+    )
+
     if backtest:
-        st.markdown("#### Backtest Metrics")
+        render_section_heading(
+            "Backtest Metrics",
+            "Per-SKU holdout metrics used to judge forecast quality before decisions are made.",
+            eyebrow="Validation",
+        )
         bdf = pd.DataFrame(backtest)
         if "mape" in bdf.columns:
             bdf["mape"] = bdf["mape"].apply(lambda x: f"{x:.1%}" if x is not None else "N/A")
         if "rmse" in bdf.columns:
             bdf["rmse"] = bdf["rmse"].apply(lambda x: f"{x:.2f}" if x is not None else "N/A")
-        st.dataframe(bdf, use_container_width=True)
+        st.dataframe(bdf, use_container_width=True, hide_index=True)
 
     forecasts = report.get("forecasts", [])
     if forecasts:
+        render_section_heading(
+            "Forecast Explorer",
+            "Inspect the released forecast band for a specific SKU.",
+            eyebrow="Scenario View",
+        )
         skus = sorted({f["stock_code"] for f in forecasts})
         selected = st.selectbox("Select SKU for forecast chart", skus)
         if selected:
-            st.plotly_chart(forecast_chart(forecasts, selected), use_container_width=True)
+            chart_col, table_col = st.columns([1.15, 0.85])
+            with chart_col:
+                st.plotly_chart(
+                    forecast_chart(forecasts, selected),
+                    use_container_width=True,
+                    config={"displayModeBar": False},
+                )
 
-            # Forecast data table for selected SKU
             sku_rows = [f for f in forecasts if f.get("stock_code") == selected]
             fdf = pd.DataFrame(sku_rows)[["ds", "yhat", "yhat_lower", "yhat_upper"]].copy()
             fdf = fdf.rename(columns={
@@ -126,10 +214,16 @@ def show_forecast_report(report: dict[str, Any]) -> None:
             })
             for col in ["Predicted Qty", "Lower Bound", "Upper Bound"]:
                 fdf[col] = fdf[col].apply(lambda x: round(float(x), 1) if x is not None else None)
-            st.dataframe(fdf, use_container_width=True, hide_index=True)
+            with table_col:
+                st.dataframe(fdf, use_container_width=True, hide_index=True)
 
     assumptions = report.get("assumptions", [])
     if assumptions:
-        with st.expander("Assumptions"):
+        render_section_heading(
+            "Forecast Assumptions",
+            "Model caveats and contextual assumptions that should accompany the forecast.",
+            eyebrow="Model Notes",
+        )
+        with st.expander("Inspect assumptions"):
             for a in assumptions:
                 st.write(f"• {a}")

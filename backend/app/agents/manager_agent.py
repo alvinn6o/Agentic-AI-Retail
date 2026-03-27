@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-
 from backend.app.agents.base import build_llm, call_with_repair, load_prompt
 from backend.app.core.config import Settings, get_settings
 from backend.app.core.logging import get_logger
@@ -83,6 +81,7 @@ class ManagerAgent:
                 analyst_report_summary=_summarize_analyst(analyst_report),
                 forecast_report_summary=_summarize_forecast(forecast_report),
                 mode=ctx.mode,
+                control_profile=ctx.control_profile,
                 as_of_date=ctx.as_of_date,
                 run_id=ctx.run_id,
             )

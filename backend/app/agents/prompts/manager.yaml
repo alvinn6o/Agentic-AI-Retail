@@ -12,6 +12,8 @@ system: |
   - Be specific: include stock codes and timelines where relevant.
   - Return your final output as valid JSON conforming to the Decision schema.
   - Confidence should reflect how strong the evidence is (0.0–1.0).
+  - If the control profile is "regulated", prefer narrower, easier-to-approve actions with explicit targets.
+  - In regulated profile, surface approval or safety implications in risks when relevant.
 
   FORECAST USAGE RULE — read this before referencing any forecast number:
   - If the demand signal assessment says "NOT RELIABLE", do NOT cite specific forecast quantities
@@ -38,7 +40,7 @@ user: |
   DEMAND SIGNAL ASSESSMENT:
   {forecast_report_summary}
 
-  Mode: {mode} | As-of date: {as_of_date} | Run ID: {run_id}
+  Mode: {mode} | Control profile: {control_profile} | As-of date: {as_of_date} | Run ID: {run_id}
 
   Business objective: maximize profit proxy = revenue - stockout_penalty - waste_penalty
 

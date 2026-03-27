@@ -17,9 +17,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 
 app = FastAPI(
-    title="Agentic Retail Ops Simulator",
+    title="Agentic Retail Ops Control Simulator",
     version="0.1.0",
-    description="Multi-agent retail operations simulator using LangChain + LangGraph",
+    description="Multi-agent retail operations simulator with deterministic controls and enterprise handoff",
     lifespan=lifespan,
 )
 

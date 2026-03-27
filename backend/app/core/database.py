@@ -105,3 +105,15 @@ def initialize_schema(conn: duckdb.DuckDBPyConnection) -> None:
             created_at    TIMESTAMP DEFAULT current_timestamp
         )
     """)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS dispatch_log (
+            run_id          VARCHAR,
+            task_id         VARCHAR,
+            target_system   VARCHAR,
+            dispatch_status VARCHAR,
+            payload_json    JSON,
+            response_json   JSON,
+            created_at      TIMESTAMP DEFAULT current_timestamp
+        )
+    """)

@@ -16,9 +16,12 @@ from backend.app.agents.data_scientist_agent import DataScientistAgent
 from backend.app.agents.manager_agent import ManagerAgent
 from backend.app.agents.worker_agent import WorkerAgent
 from backend.app.core.config import Settings, get_settings
+from backend.app.core.database import initialize_schema
 from backend.app.core.logging import get_logger
 from backend.app.graph.state import WorkflowState
 from backend.app.models.run_context import RunContext
+from backend.app.services.control_review import ControlReviewService
+from backend.app.services.enterprise_dispatch import EnterpriseDispatchService
 
 logger = get_logger(__name__)
 
@@ -37,16 +40,18 @@ def _route_after_parallel(state: WorkflowState) -> str:
 
 
 def _route_after_manager(state: WorkflowState) -> str:
-    """Only run worker if manager produced a decision."""
+    """Only run control review if manager produced a decision."""
     if state.decision is None:
         return "persist"
-    return "worker"
+    return "control_review"
 
 
-def _route_after_worker(state: WorkflowState) -> str:
-    """Only run auditor if worker produced tasks."""
-    if not state.worker_tasks:
-        return "persist"
+def _route_after_control_review(state: WorkflowState) -> str:
+    """Only run worker when at least one action can be auto-released."""
+    if state.control_review is None:
+        return "auditor"
+    if state.control_review.auto_releasable_actions:
+        return "worker"
     return "auditor"
 
 
@@ -105,19 +110,32 @@ def node_manager(state: WorkflowState) -> dict[str, Any]:
 
 
 def node_worker(state: WorkflowState) -> dict[str, Any]:
-    # Precondition guaranteed by _route_after_manager — decision exists here.
+    # Precondition guaranteed by _route_after_control_review — executable actions exist here.
     settings = get_settings()
     agent = WorkerAgent(settings)
     try:
-        tasks = agent.run(state.ctx, state.decision)
+        control_service = ControlReviewService()
+        executable_actions = control_service.executable_actions(state.decision, state.control_review)
+        executable_decision = state.decision.model_copy(update={"actions": executable_actions})
+        tasks = agent.run(state.ctx, executable_decision)
         return {"worker_tasks": tasks}
     except Exception as exc:
         logger.error("node.worker.error", error=str(exc))
         return {"errors": (state.errors or []) + [f"Worker: {exc}"]}
 
 
+def node_control_review(state: WorkflowState) -> dict[str, Any]:
+    service = ControlReviewService()
+    try:
+        review = service.review(state.ctx, state.decision)
+        return {"control_review": review}
+    except Exception as exc:
+        logger.error("node.control_review.error", error=str(exc))
+        return {"errors": (state.errors or []) + [f"ControlReview: {exc}"]}
+
+
 def node_auditor(state: WorkflowState) -> dict[str, Any]:
-    # Precondition guaranteed by _route_after_worker — all artifacts exist here.
+    # Precondition guaranteed by _route_after_control_review / node_worker.
     settings = get_settings()
     agent = AuditorAgent(settings)
     try:
@@ -128,6 +146,22 @@ def node_auditor(state: WorkflowState) -> dict[str, Any]:
     except Exception as exc:
         logger.error("node.auditor.error", error=str(exc))
         return {"errors": (state.errors or []) + [f"Auditor: {exc}"]}
+
+
+def node_dispatch(state: WorkflowState) -> dict[str, Any]:
+    settings = get_settings()
+    service = EnterpriseDispatchService(settings)
+    try:
+        report = service.dispatch(
+            state.ctx,
+            state.control_review,
+            state.audit_report,
+            state.worker_tasks,
+        )
+        return {"dispatch_report": report}
+    except Exception as exc:
+        logger.error("node.dispatch.error", error=str(exc))
+        return {"errors": (state.errors or []) + [f"Dispatch: {exc}"]}
 
 
 def node_fan_in(state: WorkflowState) -> dict[str, Any]:
@@ -145,6 +179,7 @@ def node_persist(state: WorkflowState) -> dict[str, Any]:
 
     try:
         conn = duckdb.connect(db_path)
+        initialize_schema(conn)
 
         def persist_artifact(artifact_type: str, obj: Any) -> None:
             if obj is None:
@@ -158,7 +193,9 @@ def node_persist(state: WorkflowState) -> dict[str, Any]:
         persist_artifact("analyst_report", state.analyst_report)
         persist_artifact("forecast_report", state.forecast_report)
         persist_artifact("decision", state.decision)
+        persist_artifact("control_review", state.control_review)
         persist_artifact("audit_report", state.audit_report)
+        persist_artifact("dispatch_report", state.dispatch_report)
 
         if state.decision:
             conn.execute(
@@ -178,6 +215,24 @@ def node_persist(state: WorkflowState) -> dict[str, Any]:
                 "INSERT INTO run_artifacts (run_id, artifact_type, artifact_json) VALUES (?, ?, ?)",
                 [run_id, "worker_tasks", tasks_payload],
             )
+
+        if state.dispatch_report:
+            for record in state.dispatch_report.records:
+                conn.execute(
+                    """
+                    INSERT INTO dispatch_log (
+                        run_id, task_id, target_system, dispatch_status, payload_json, response_json
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        run_id,
+                        record.task_id,
+                        record.target_system,
+                        record.status,
+                        json.dumps(record.payload),
+                        json.dumps(record.response_body),
+                    ],
+                )
 
         conn.close()
         logger.info("persist.done", run_id=run_id)
@@ -200,8 +255,10 @@ def build_workflow() -> StateGraph:
     builder.add_node("data_scientist", node_data_scientist)
     builder.add_node("fan_in", node_fan_in)
     builder.add_node("manager", node_manager)
+    builder.add_node("control_review", node_control_review)
     builder.add_node("worker", node_worker)
     builder.add_node("auditor", node_auditor)
+    builder.add_node("dispatch", node_dispatch)
     builder.add_node("persist", node_persist)
 
     builder.set_entry_point("data_engineer")
@@ -222,22 +279,24 @@ def build_workflow() -> StateGraph:
         {"manager": "manager", "persist": "persist"},
     )
 
-    # manager → worker (or bypass to persist if no decision)
+    # manager → control_review (or bypass to persist if no decision)
     builder.add_conditional_edges(
         "manager",
         _route_after_manager,
-        {"worker": "worker", "persist": "persist"},
+        {"control_review": "control_review", "persist": "persist"},
     )
 
-    # worker → auditor (or bypass to persist if no tasks)
+    # control_review → worker when actions can be auto-released, otherwise audit directly
     builder.add_conditional_edges(
-        "worker",
-        _route_after_worker,
-        {"auditor": "auditor", "persist": "persist"},
+        "control_review",
+        _route_after_control_review,
+        {"worker": "worker", "auditor": "auditor"},
     )
 
-    # auditor → persist → END
-    builder.add_edge("auditor", "persist")
+    # worker → auditor → dispatch → persist → END
+    builder.add_edge("worker", "auditor")
+    builder.add_edge("auditor", "dispatch")
+    builder.add_edge("dispatch", "persist")
     builder.add_edge("persist", END)
 
     return builder
@@ -247,6 +306,7 @@ def run_cycle(
     as_of_date: date,
     mode: str,
     start_date: date | None = None,
+    control_profile: str = "standard",
     settings: Settings | None = None,
     skip_ingest: bool = False,
     run_id: str | None = None,
@@ -256,6 +316,7 @@ def run_cycle(
         "start_date": start_date or as_of_date - timedelta(days=90),
         "as_of_date": as_of_date,
         "mode": mode,
+        "control_profile": control_profile,
     }
     if run_id is not None:
         ctx_kwargs["run_id"] = run_id

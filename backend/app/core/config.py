@@ -1,7 +1,6 @@
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -37,6 +36,14 @@ class Settings(BaseSettings):
     # App
     log_level: str = "INFO"
     max_repair_retries: int = 3
+
+    # Enterprise dispatch
+    enterprise_target_system: Literal["custom", "jira", "service_now", "sap"] = "custom"
+    enterprise_api_base_url: str = ""
+    enterprise_task_endpoint: str = "/tasks"
+    enterprise_api_key: str = ""
+    enterprise_api_timeout_seconds: float = 10.0
+    enterprise_dry_run: bool = True
 
     # LangSmith (optional)
     langchain_tracing_v2: bool = False

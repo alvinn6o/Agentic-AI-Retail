@@ -28,6 +28,7 @@ class RunRequest(BaseModel):
     start_date: date
     as_of_date: date
     mode: Literal["bounded", "omniscient"] = "bounded"
+    control_profile: Literal["standard", "regulated"] = "standard"
     skip_ingest: bool = False
 
     @model_validator(mode="after")
@@ -63,6 +64,7 @@ async def trigger_run(req: RunRequest, background_tasks: BackgroundTasks) -> Run
                 req.as_of_date,
                 req.mode,
                 start_date=req.start_date,
+                control_profile=req.control_profile,
                 skip_ingest=req.skip_ingest,
                 run_id=run_id,
             )
